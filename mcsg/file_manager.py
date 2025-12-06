@@ -36,8 +36,8 @@ class FileMeta:
 
     @classmethod
     def from_file(cls, remote_path: str, file_path: str) -> "FileMeta":
-        with open(file_path, "r", encoding="utf-8") as f:
-            return cls(remote_path, hashlib.sha256(f.read().encode()).hexdigest(), os.path.getmtime(file_path))
+        with open(file_path, "rb") as f:
+            return cls(remote_path, hashlib.sha256(f.read()).hexdigest(), os.path.getmtime(file_path))
     
     def to_meta(self, meta_path: str):
         with open(meta_path, "w", encoding="utf-8") as f:
@@ -160,7 +160,7 @@ class FileManager:
             logging.error("Hash mismatch for file %s, aborting.", e.path)
             for callback_fail in callback_fail_list:
                 callback_fail()
-        except e:
+        except Exception as e:
             logging.error("Failed to pull file %s, aborting.", path)
             logging.exception(e)
             for callback_fail in callback_fail_list:
@@ -171,7 +171,7 @@ class FileManager:
 
     def push(self, strict: bool = False):
         commit_time = datetime.now()
-        prefix = str(int(commit_time.timestamp()))
+        prefix = str(int(commit_time.timestamp())) + "-" + self.git.last_commit_hash()
         try:
             self.git.reset(".")
             for root, _dirs, files in tqdm(os.walk(self.server_dir), desc="Pushing files"):
@@ -186,7 +186,7 @@ class FileManager:
             logging.error(e.stdout)
             logging.error(e.stderr)
             logging.error("Push operation aborted.")
-        except e:
+        except Exception as e:
             self.git.reset(".")
             logging.exception("Failed to push files. Exception: %s", e)
 
@@ -194,12 +194,15 @@ class FileManager:
         prefix = int(time.timestamp())
         for dir_or_file in self.storage.list(self.remote_root):
             if isinstance(dir_or_file, DirInfo):
-                dir_name = dir_or_file.directory.split("/")[-1]
-                if not dir_name.isdigit():
-                    logging.warning("Invalid directory name %s, skipping.", dir_name)
-                dir_time = int(dir_name)    # We use timestamp directly as the directory name
-                if dir_time < prefix:
-                    self.storage.delete(dir_or_file.path)
-                    logging.info("Deleted remote directory %s created at %s", dir_name, datetime.fromtimestamp(dir_time).strftime("%Y-%m-%d %H:%M:%S"))
+                try:
+                    dir_name = dir_or_file.path.split("/")[-1]
+                    if not dir_name.isdigit() or "-" not in dir_name:
+                        logging.warning("Invalid directory name %s, skipping.", dir_name)
+                    dir_time = int(dir_name.split("-")[0])    # We use timestamp directly as the directory name
+                    if dir_time < prefix:
+                        self.storage.delete(dir_or_file.path)
+                        logging.info("Deleted remote directory %s created at %s", dir_name, datetime.fromtimestamp(dir_time).strftime("%Y-%m-%d %H:%M:%S"))
+                except Exception as e:
+                    logging.exception("Failed to delete remote directory %s, skipping. Exception: %s", dir_or_file.path, e)
             else:
                 logging.warning("Unexpected file %s, skipping.", dir_or_file.path.split("/")[-1])

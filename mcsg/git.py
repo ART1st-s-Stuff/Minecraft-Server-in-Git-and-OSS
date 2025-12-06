@@ -27,3 +27,6 @@ class Git:
 
     def reset(self, *directory: List[str]):
         return self._run("reset", *directory)
+
+    def last_commit_hash(self) -> str:
+        return self._run("rev-parse", "HEAD").stdout.strip()
