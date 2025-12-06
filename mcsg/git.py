@@ -24,3 +24,6 @@ class Git:
 
     def commit(self, message: str):
         return self._run("commit", message)
+
+    def reset(self, *directory: List[str]):
+        return self._run("reset", *directory)

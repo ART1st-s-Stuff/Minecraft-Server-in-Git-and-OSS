@@ -115,6 +115,7 @@ class FileManager:
             # Skip file if it doesn't match the file filter
             return
 
+        self.git.add(rel_path)
         # Check if meta exists
         meta_path = path + ".meta"
         if os.path.exists(meta_path):
@@ -172,19 +173,21 @@ class FileManager:
         commit_time = datetime.now()
         prefix = str(int(commit_time.timestamp()))
         try:
+            self.git.reset(".")
             for root, _dirs, files in tqdm(os.walk(self.server_dir), desc="Pushing files"):
                 for file in tqdm(files, desc=root, leave=False):
                     path = os.path.join(root, file)
                     self._push_file(prefix=prefix, path=path, strict=strict)
-            self.git.add(".")
             self.git.commit(f"Update files at {commit_time.strftime('%Y-%m-%d %H:%M:%S')}")
             self.git.push()
         except CalledProcessError as e:
+            self.git.reset(".")
             logging.error("Command `git push` failed.")
             logging.error(e.stdout)
             logging.error(e.stderr)
             logging.error("Push operation aborted.")
         except e:
+            self.git.reset(".")
             logging.exception("Failed to push files. Exception: %s", e)
 
     def clean_remote(self, time: datetime):
