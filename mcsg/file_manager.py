@@ -84,7 +84,7 @@ class FileManager:
 
         Args:
             path: The path to the file.
-            strict: Whether to strictly validate the hash.
+            strict: If set to False, will not compare hash if modified time is the same.
 
         Returns:
             callback_success: Callback to replace the local file with the temporary file on success case.
@@ -99,6 +99,7 @@ class FileManager:
         if meta.validate(path, strict):
             return None, None
         
+        logging.info("Pulling file %s", path)
         self.storage.retrieve(
             local_path=tmp_path,
             remote_path=meta.remote_path
@@ -109,33 +110,58 @@ class FileManager:
 
         return lambda: (os.remove(path), os.rename(tmp_path, path)), lambda: os.remove(tmp_path)
 
-    def _push_file(self, prefix: str, path: str, strict: bool = False):
+    def _push_file(self, prefix: str, path: str, strict: bool = False) -> Tuple[Optional[Callable[[], None]], Optional[Callable[[], None]]]:
+        """Push the file to the remote storage and update the meta file.
+
+        Args:
+            prefix: The prefix for the remote path.
+            path: The path to the file.
+            strict: If set to False, will not compare hash if modified time is the same.
+
+        Returns:
+            callback_success: Callback to save the meta file on success case.
+            callback_fail: Not used by now.
+        """
         rel_path = os.path.relpath(path, self.server_dir)
+        if rel_path.startswith(".git/"):
+            return None, None
+
         if not self.file_filter(rel_path, path):
             # Skip file if it doesn't match the file filter
-            return
+            return None, None
 
-        self.git.add(rel_path)
         # Check if meta exists
         meta_path = path + ".meta"
         if os.path.exists(meta_path):
             meta = FileMeta.from_meta(meta_path)
             # Skip if meta is up to date
             if meta.validate(path, strict):
-                return
+                return None, None
 
+        logging.info("Pushing file %s", rel_path)
+        if not self.git.is_ignored(rel_path):
+            self.git.rm_cached(rel_path)
+        
         # Update meta
         remote_path = self.storage.join_path(self.remote_root, prefix, path)
-        meta = FileMeta.from_file(remote_path=remote_path, file_path=path)
-        meta.to_meta(meta_path)
 
         # Push to storage
         self.storage.store(
             local_path=path,
             remote_path=remote_path
         )
+        
+        def save_meta():
+            meta = FileMeta.from_file(remote_path=remote_path, file_path=path)
+            meta.to_meta(meta_path)
+        return save_meta, None
 
     def pull(self, strict: bool = False):
+        """Pull from git and update local server directory.
+
+        Args:
+            strict: If set to False, will not compare hash if modified time is the same.
+        """
         try:
             self.git.pull()
         except CalledProcessError as e:
@@ -150,12 +176,12 @@ class FileManager:
         try:
             for root, _dirs, files in tqdm(os.walk(self.server_dir), desc="Pulling files"):
                 for file in tqdm(files, desc=root, leave=False):
-                        path = os.path.join(root, file)
-                        callback_succ, callback_fail = self._pull_file(path, strict)
-                        if callback_succ is not None:
-                            callback_succ_list.append(callback_succ)
-                        if callback_fail is not None:
-                            callback_fail_list.append(callback_fail)
+                    path = os.path.join(root, file)
+                    callback_succ, callback_fail = self._pull_file(path, strict)
+                    if callback_succ is not None:
+                        callback_succ_list.append(callback_succ)
+                    if callback_fail is not None:
+                        callback_fail_list.append(callback_fail)
         except FileHashMismatchException as e:
             logging.error("Hash mismatch for file %s, aborting.", e.path)
             for callback_fail in callback_fail_list:
@@ -170,27 +196,51 @@ class FileManager:
                 callback_succ()
 
     def push(self, strict: bool = False):
+        """Push the files to the remote storage and commit the changes.
+
+        Args:
+            strict: If set to False, will not compare hash if modified time is the same.
+        """
         commit_time = datetime.now()
         prefix = str(int(commit_time.timestamp())) + "-" + self.git.last_commit_hash()
+        callback_succ_list: List[Callable[[], None]] = []
+        callback_fail_list: List[Callable[[], None]] = []
         try:
             self.git.reset(".")
+            self.git.add(".")
             for root, _dirs, files in tqdm(os.walk(self.server_dir), desc="Pushing files"):
                 for file in tqdm(files, desc=root, leave=False):
                     path = os.path.join(root, file)
-                    self._push_file(prefix=prefix, path=path, strict=strict)
+                    callback_succ, callback_fail = self._push_file(prefix=prefix, path=path, strict=strict)
+                    if callback_succ is not None:
+                        callback_succ_list.append(callback_succ)
+                    if callback_fail is not None:
+                        callback_fail_list.append(callback_fail)
             self.git.commit(f"Update files at {commit_time.strftime('%Y-%m-%d %H:%M:%S')}")
             self.git.push()
         except CalledProcessError as e:
             self.git.reset(".")
-            logging.error("Command `git push` failed.")
+            for callback_fail in callback_fail_list:
+                callback_fail()
+            logging.exception("Push failed.")
             logging.error(e.stdout)
             logging.error(e.stderr)
             logging.error("Push operation aborted.")
         except Exception as e:
             self.git.reset(".")
+            for callback_fail in callback_fail_list:
+                callback_fail()
             logging.exception("Failed to push files. Exception: %s", e)
+        else:
+            for callback_succ in callback_succ_list:
+                callback_succ()
 
     def clean_remote(self, time: datetime):
+        """Clean remote storage by deleting directories created before the given time.
+
+        Args:
+            time: The time to clean the remote storage.
+        """
         prefix = int(time.timestamp())
         for dir_or_file in self.storage.list(self.remote_root):
             if isinstance(dir_or_file, DirInfo):
