@@ -25,8 +25,8 @@ class Git:
     def commit(self, message: str):
         return self._run("commit", "-m", message)
 
-    def reset(self, *directory: List[str]):
-        return self._run("reset", *directory)
+    def reset(self, *directories: List[str], commit: str="HEAD"):
+        return self._run("reset", commit, *directories)
 
     def last_commit_hash(self) -> str:
         return self._run("rev-parse", "HEAD").stdout.strip()
@@ -36,3 +36,15 @@ class Git:
 
     def is_ignored(self, path: str) -> bool:
         return self._run("check-ignore", path, check=False).returncode == 0
+
+    def tag(self, name: str, commit: str, message: str):
+        return self._run("tag", name, commit, "-m", message)
+
+    def get_latest_hash(self, path: str) -> str:
+        return self._run("log", "-1", "--format=%H", "--", path).stdout.strip()
+
+    def get_tag_hash(self, name: str) -> str:
+        return self._run("rev-parse", name).stdout.strip()
+
+    def get_tag_message(self, name: str) -> str:
+        return self._run("tag", "-l", name, "--format=%(contents)").stdout.strip()

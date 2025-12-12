@@ -18,19 +18,19 @@ class DirInfo:
 
 class RemoteStorage(ABC):
     @abstractmethod
-    def store(self, local_path: str, remote_path: str) -> None:
+    def store(self, local_path_list: List[str], remote_path_list: List[str]) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def retrieve(self, remote_path: str, local_path: str) -> None:
+    def retrieve(self, remote_path_list: List[str], local_path_list: List[str]) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def delete(self, remote_path: str) -> None:
+    def delete(self, remote_path_list: List[str]) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def list(self, remote_path: str) -> List[Union[FileInfo, DirInfo]]:
+    def exists(self, remote_path: str) -> bool:
         raise NotImplementedError
 
     @abstractmethod
